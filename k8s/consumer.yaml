@@ -1,4 +1,4 @@
-apiVersions: v1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kafka-consumer
@@ -14,30 +14,58 @@ spec:
       labels:
         app: kafka-consumer
     spec:
+      initContainers:
+        - name: wait-for-kafka
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Kafka port to open..."
+              until nc -z kafka 9092; do
+                echo "  kafka:9092 not reachable, retrying in 2s..."
+                sleep 2
+              done
+              echo "Kafka port is open. Sleeping 15s for broker to fully initialize..."
+              sleep 15
+              echo "Done. Starting consumer."
       containers:
         - name: kafka-consumer
-          image: adityasurya2003/kafka-consumer:latest
-          imagePullPolicy: Always
-          ports:
-            - containerPort: 8080
+          image: querymesh/consumer:latest
+          imagePullPolicy: IfNotPresent
           env:
             - name: KAFKA_BROKER
-              value: "kafka:9092"           # K8s service DNS name
+              value: kafka:9092
             - name: KAFKA_TOPIC
-              value: "messages"
+              value: urls
             - name: KAFKA_GROUP_ID
-              value: "my-consumer-group"
+              value: crawler-consumer
+            - name: WORKER_COUNT
+              value: "4"
+            - name: HTTP_TIMEOUT
+              value: 10s
+            - name: SHUTDOWN_TIMEOUT
+              value: 15s
           resources:
             requests:
-              memory: "64Mi"
-              cpu: "50m"
-            limits:
               memory: "128Mi"
-              cpu: "200m"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
           livenessProbe:
             exec:
-              command: ["pgrep", "consumer"]
+              command:
+                - /bin/sh
+                - -c
+                - kill -0 1
             initialDelaySeconds: 10
             periodSeconds: 15
-
-
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - kill -0 1
+            initialDelaySeconds: 5
+            periodSeconds: 10

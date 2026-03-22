@@ -1,0 +1,32 @@
+apiVersion: skaffold/v4beta11
+kind: Config
+metadata:
+  name: querymesh
+build:
+  artifacts:
+    - image: querymesh/consumer
+      context: crawler
+      docker:
+        dockerfile: Dockerfile
+  local:
+    concurrency: 1
+    push: false
+manifests:
+  rawYaml:
+    - k8s/zookeeper.yaml
+    - k8s/kafka.yaml
+    - k8s/consumer.yaml
+deploy:
+  kubectl: {}
+portForward:
+  - resourceType: service
+    resourceName: kafka
+    port: 9093
+    localPort: 9093
+profiles:
+  - name: dev
+    activation:
+      - command: dev
+    build:
+      local:
+        push: false
