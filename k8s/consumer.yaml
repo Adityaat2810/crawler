@@ -1,0 +1,43 @@
+apiVersions: v1
+kind: Deployment
+metadata:
+  name: kafka-consumer
+  labels:
+    app: kafka-consumer
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kafka-consumer
+  template:
+    metadata:
+      labels:
+        app: kafka-consumer
+    spec:
+      containers:
+        - name: kafka-consumer
+          image: adityasurya2003/kafka-consumer:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: KAFKA_BROKER
+              value: "kafka:9092"           # K8s service DNS name
+            - name: KAFKA_TOPIC
+              value: "messages"
+            - name: KAFKA_GROUP_ID
+              value: "my-consumer-group"
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+          livenessProbe:
+            exec:
+              command: ["pgrep", "consumer"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+
+
