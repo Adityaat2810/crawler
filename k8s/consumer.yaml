@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kafka-consumer
+  namespace: querymesh
   labels:
     app: kafka-consumer
 spec:
@@ -33,21 +34,9 @@ spec:
         - name: kafka-consumer
           image: querymesh/consumer:latest
           imagePullPolicy: IfNotPresent
-          env:
-            - name: KAFKA_BROKER
-              value: kafka:9092
-            - name: KAFKA_TOPIC
-              value: urls
-            - name: KAFKA_GROUP_ID
-              value: crawler-consumer
-            - name: WORKER_COUNT
-              value: "4"
-            - name: HTTP_TIMEOUT
-              value: 10s
-            - name: SHUTDOWN_TIMEOUT
-              value: 15s
-            - name: EXECUTION_MODE
-              value: "consumer"
+          envFrom:
+            - configMapRef:
+                name: consumer-config
           resources:
             requests:
               memory: "128Mi"

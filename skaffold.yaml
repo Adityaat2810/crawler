@@ -13,8 +13,11 @@ build:
     push: false
 manifests:
   rawYaml:
+    - k8s/namespace.yaml
     - k8s/zookeeper.yaml
     - k8s/kafka.yaml
+    - k8s/minio.yaml
+    - k8s/consumer-configmap.yaml
     - k8s/consumer.yaml
 deploy:
   kubectl: {}
