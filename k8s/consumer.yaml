@@ -46,6 +46,8 @@ spec:
               value: 10s
             - name: SHUTDOWN_TIMEOUT
               value: 15s
+            - name: EXECUTION_MODE
+              value: "consumer"
           resources:
             requests:
               memory: "128Mi"

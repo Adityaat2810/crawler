@@ -65,3 +65,7 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 	}
 	return fallback
 }
+
+func GetExecutionMode() string {
+	return getenv("EXECUTION_MODE", "consumer")
+}
