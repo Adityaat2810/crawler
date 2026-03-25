@@ -4,7 +4,7 @@ import (
 	"log"
 
 	"github.com/example/consumer/internal/config"
-	"github.com/example/consumer/internal/kafkaconsumer"
+	"github.com/example/consumer/internal/fetcher/kafkaconsumer"
 )
 
 func main(){
