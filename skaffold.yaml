@@ -19,6 +19,7 @@ manifests:
     - k8s/minio.yaml
     - k8s/consumer-configmap.yaml
     - k8s/consumer.yaml
+    - k8s/valkey.yaml
 deploy:
   kubectl: {}
 portForward:
