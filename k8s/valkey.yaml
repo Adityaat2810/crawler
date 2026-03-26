@@ -1,0 +1,97 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: valkey-standard
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: valkey-pv
+  labels:
+    app: valkey
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: valkey-standard
+  hostPath:
+    path: /mnt/data/valkey
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+  namespace: querymesh
+  labels:
+    app: valkey
+spec:
+  ports:
+    - name: client
+      port: 6379
+      targetPort: 6379
+  selector:
+    app: valkey
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: valkey
+  namespace: querymesh
+  labels:
+    app: valkey
+spec:
+  serviceName: valkey
+  replicas: 1
+  selector:
+    matchLabels:
+      app: valkey
+  template:
+    metadata:
+      labels:
+        app: valkey
+    spec:
+      containers:
+        - name: valkey
+          image: docker.io/valkey/valkey:7.2
+          ports:
+            - containerPort: 6379
+              name: client
+          args:
+            - "--save"
+            - "900"
+            - "1"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 10
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: valkey-standard
+        resources:
+          requests:
+            storage: 5Gi
