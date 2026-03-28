@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fetcher-config
+  namespace: querymesh
+data:
+  # Kafka settings
+  KAFKA_BROKER: kafka:9092
+  KAFKA_TOPIC: urls
+  KAFKA_GROUP_ID: crawler-consumer
+  FETCHER_GROUP_ID: fetcher-group
+  FRONTIER_READY_TOPIC: frontier.ready
+  FETCH_RETRY_TOPIC: frontier.retry
+  FETCH_SUCCESS_TOPIC: crawl.fetch.success
+  FETCH_DLQ_TOPIC: crawl.fetch.dlq
+  
+  # Worker settings
+  WORKER_COUNT: "4"
+  
+  # HTTP settings
+  HTTP_TIMEOUT: "10s"
+  FETCH_TIMEOUT: "30s"
+  SHUTDOWN_TIMEOUT: "15s"
+  USER_AGENT: "QueryMeshFetcher/0.1"
+  
+  # Execution mode
+  EXECUTION_MODE: "fetcher"
+  
+  # Valkey settings
+  VALKEY_ADDR: valkey:6379
+  VALKEY_PASSWORD: ""
+  
+  # S3/MinIO settings (credentials from secret)
+  S3_ENDPOINT: s3:9000
+  S3_BUCKET: crawler-raw
+  S3_USE_SSL: "false"
+  S3_REGION: us-east-1
+  
+  # Health server
+  HEALTH_PORT: "8080"

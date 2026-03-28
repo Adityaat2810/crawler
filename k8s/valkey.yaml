@@ -1,26 +1,3 @@
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: valkey-standard
-provisioner: kubernetes.io/no-provisioner
-volumeBindingMode: WaitForFirstConsumer
-reclaimPolicy: Delete
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: valkey-pv
-  labels:
-    app: valkey
-spec:
-  capacity:
-    storage: 5Gi
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: valkey-standard
-  hostPath:
-    path: /mnt/data/valkey
----
 apiVersion: v1
 kind: Service
 metadata:
@@ -63,8 +40,10 @@ spec:
               name: client
           args:
             - "--save"
-            - "900"
+            - "60"
             - "1"
+            - "--appendonly"
+            - "yes"
           volumeMounts:
             - name: data
               mountPath: /data
@@ -76,22 +55,27 @@ spec:
               cpu: 500m
               memory: 512Mi
           readinessProbe:
-            tcpSocket:
-              port: 6379
+            exec:
+              command:
+                - redis-cli
+                - ping
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 2
           livenessProbe:
-            tcpSocket:
-              port: 6379
+            exec:
+              command:
+                - redis-cli
+                - ping
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 2
   volumeClaimTemplates:
     - metadata:
         name: data
       spec:
         accessModes:
           - ReadWriteOnce
-        storageClassName: valkey-standard
         resources:
           requests:
-            storage: 5Gi
+            storage: 1Gi

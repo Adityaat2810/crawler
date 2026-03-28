@@ -1,0 +1,39 @@
+# Job to create the MinIO bucket if it doesn't exist. 
+kind: Job
+metadata:
+  name: minio-create-bucket
+  namespace: querymesh
+spec:
+  template:
+    metadata:
+      labels:
+        app: minio-create-bucket
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          env:
+            - name: MINIO_ENDPOINT
+              value: http://s3:9000
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: s3-credentials
+                  key: accesskey
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: s3-credentials
+                  key: secretkey
+            - name: BUCKET
+              value: crawler-raw
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              mc alias set local "${MINIO_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}"
+              mc mb --ignore-existing local/"${BUCKET}"
+              mc anonymous set download local/"${BUCKET}"
+              echo "bucket ensured"

@@ -1,0 +1,36 @@
+# Job to create Kafka topics if they don't exist.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-create-topics
+  namespace: querymesh
+spec:
+  template:
+    metadata:
+      labels:
+        app: kafka-create-topics
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-topics
+          image: confluentinc/cp-kafka:7.6.1
+          env:
+            - name: KAFKA_BROKER
+              value: kafka:9092
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              broker="${KAFKA_BROKER}"
+              create_topic () {
+                topic="$1"
+                partitions="${2:-3}"
+                replication="${3:-1}"
+                kafka-topics --create --if-not-exists --bootstrap-server "$broker" --topic "$topic" --partitions "$partitions" --replication-factor "$replication"
+              }
+              create_topic frontier.ready 3 1
+              create_topic frontier.retry 3 1
+              create_topic crawl.fetch.success 3 1
+              create_topic crawl.fetch.dlq 3 1
+              echo "topics ensured"
