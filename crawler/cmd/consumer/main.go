@@ -10,6 +10,7 @@ import (
 	"github.com/querymesh/crawler/internal/config"
 	"github.com/querymesh/crawler/internal/fetcher"
 	"github.com/querymesh/crawler/internal/fetcher/kafkaconsumer"
+	"github.com/querymesh/crawler/internal/parser"
 )
 
 func main() {
@@ -48,7 +49,18 @@ func main() {
 		}
 		logger.Println("fetcher stopped gracefully")
 
+	case "parser":
+		// Parser mode - extracts text and links from fetched content
+		p, err := parser.Init(ctx, cfg, logger)
+		if err != nil {
+			logger.Fatalf("init parser: %v", err)
+		}
+		if err := p.Run(ctx); err != nil && err != context.Canceled {
+			logger.Fatalf("parser run: %v", err)
+		}
+		logger.Println("parser stopped gracefully")
+
 	default:
-		logger.Fatalf("unknown EXECUTION_MODE: %s (valid: consumer, fetcher)", execMode)
+		logger.Fatalf("unknown EXECUTION_MODE: %s (valid: consumer, fetcher, parser)", execMode)
 	}
 }
