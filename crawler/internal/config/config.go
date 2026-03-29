@@ -19,6 +19,11 @@ type Config struct {
 	FetchSuccessTopic  string
 	FetchDLQTopic      string
 
+	// Parser Kafka settings
+	ParserGroupID     string
+	ParseSuccessTopic string
+	ParseDLQTopic     string
+
 	// Worker settings
 	WorkerCount int
 
@@ -33,12 +38,19 @@ type Config struct {
 	ValkeyPassword string
 
 	// S3/MinIO settings
-	S3Endpoint  string
-	S3Bucket    string
-	S3AccessKey string
-	S3SecretKey string
-	S3UseSSL    bool
-	S3Region    string
+	S3Endpoint     string
+	S3Bucket       string
+	S3ParsedBucket string
+	S3AccessKey    string
+	S3SecretKey    string
+	S3UseSSL       bool
+	S3Region       string
+
+	// Bloom filter settings
+	BloomFilterKey         string
+	BloomExpectedItems     uint64
+	BloomFalsePositiveRate float64
+	BloomTTL               time.Duration
 
 	// Health server
 	HealthPort int
@@ -47,7 +59,7 @@ type Config struct {
 // Load reads environment variables and returns a Config with sane defaults.
 func Load() Config {
 	cfg := Config{
-		// Kafka
+		// Kafka - Fetcher
 		KafkaBroker:        getenv("KAFKA_BROKER", "kafka:9092"),
 		KafkaTopic:         getenv("KAFKA_TOPIC", "urls"),
 		KafkaGroupID:       getenv("KAFKA_GROUP_ID", "crawler-consumer"),
@@ -56,6 +68,11 @@ func Load() Config {
 		FetchRetryTopic:    getenv("FETCH_RETRY_TOPIC", "frontier.retry"),
 		FetchSuccessTopic:  getenv("FETCH_SUCCESS_TOPIC", "crawl.fetch.success"),
 		FetchDLQTopic:      getenv("FETCH_DLQ_TOPIC", "crawl.fetch.dlq"),
+
+		// Kafka - Parser
+		ParserGroupID:     getenv("PARSER_GROUP_ID", "parser-group"),
+		ParseSuccessTopic: getenv("PARSE_SUCCESS_TOPIC", "crawl.parse.success"),
+		ParseDLQTopic:     getenv("PARSE_DLQ_TOPIC", "crawl.parse.dlq"),
 
 		// Workers
 		WorkerCount: getInt("WORKER_COUNT", 4),
@@ -71,12 +88,19 @@ func Load() Config {
 		ValkeyPassword: getenv("VALKEY_PASSWORD", ""),
 
 		// S3
-		S3Endpoint:  getenv("S3_ENDPOINT", "s3:9000"),
-		S3Bucket:    getenv("S3_BUCKET", "crawler-raw"),
-		S3AccessKey: getenv("S3_ACCESS_KEY", "minioadmin"),
-		S3SecretKey: getenv("S3_SECRET_KEY", "minioadmin"),
-		S3UseSSL:    getBool("S3_USE_SSL", false),
-		S3Region:    getenv("S3_REGION", "us-east-1"),
+		S3Endpoint:     getenv("S3_ENDPOINT", "s3:9000"),
+		S3Bucket:       getenv("S3_BUCKET", "crawler-raw"),
+		S3ParsedBucket: getenv("S3_PARSED_BUCKET", "crawler-parsed"),
+		S3AccessKey:    getenv("S3_ACCESS_KEY", "minioadmin"),
+		S3SecretKey:    getenv("S3_SECRET_KEY", "minioadmin"),
+		S3UseSSL:       getBool("S3_USE_SSL", false),
+		S3Region:       getenv("S3_REGION", "us-east-1"),
+
+		// Bloom filter
+		BloomFilterKey:         getenv("BLOOM_FILTER_KEY", "bloom:urls"),
+		BloomExpectedItems:     getUint64("BLOOM_EXPECTED_ITEMS", 10_000_000),
+		BloomFalsePositiveRate: getFloat64("BLOOM_FALSE_POSITIVE_RATE", 0.01),
+		BloomTTL:               getDuration("BLOOM_TTL", 0), // 0 = no expiry
 
 		// Health
 		HealthPort: getInt("HEALTH_PORT", 8080),
@@ -131,6 +155,30 @@ func getBool(key string, fallback bool) bool {
 		parsed, err := strconv.ParseBool(v)
 		if err != nil {
 			log.Printf("cannot parse %s=%s as bool: %v", key, v, err)
+			return fallback
+		}
+		return parsed
+	}
+	return fallback
+}
+
+func getUint64(key string, fallback uint64) uint64 {
+	if v := os.Getenv(key); v != "" {
+		parsed, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			log.Printf("cannot parse %s=%s as uint64: %v", key, v, err)
+			return fallback
+		}
+		return parsed
+	}
+	return fallback
+}
+
+func getFloat64(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			log.Printf("cannot parse %s=%s as float64: %v", key, v, err)
 			return fallback
 		}
 		return parsed
