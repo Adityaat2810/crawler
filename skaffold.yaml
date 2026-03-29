@@ -4,7 +4,7 @@ metadata:
   name: querymesh
 build:
   artifacts:
-    - image: querymesh/consumer
+    - image: querymesh/crawler
       context: crawler
       docker:
         dockerfile: Dockerfile
@@ -16,10 +16,12 @@ manifests:
     - k8s/namespace.yaml
     - k8s/zookeeper.yaml
     - k8s/kafka.yaml
-    - k8s/minio.yaml
-    - k8s/consumer-configmap.yaml
-    - k8s/consumer.yaml
+    - k8s/kafka-topics-job.yaml
     - k8s/valkey.yaml
+    - k8s/minio.yaml
+    - k8s/minio-bucket-job.yaml
+    - k8s/fetcher-config.yaml
+    - k8s/fetcher.yaml
 deploy:
   kubectl: {}
 portForward:
@@ -27,6 +29,10 @@ portForward:
     resourceName: kafka
     port: 9093
     localPort: 9093
+  - resourceType: service
+    resourceName: fetcher
+    port: 8080
+    localPort: 8080
 profiles:
   - name: dev
     activation:
