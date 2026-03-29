@@ -2,63 +2,55 @@
 
 **A distributed, cloud-native web crawler built for scale.**
 
-QueryMesh is an event-driven web fetching system designed for horizontal scalability, fault tolerance, and polite crawling. Built with Go and orchestrated via Kubernetes, it processes URLs through Kafka, respects robots.txt directives, and stores raw content in S3-compatible storage.
+QueryMesh is an event-driven web crawling system designed for horizontal scalability, fault tolerance, and polite crawling. Built with Go and orchestrated via Kubernetes, it processes URLs through Kafka, respects robots.txt directives, extracts content, and stores data in S3-compatible storage.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              Q U E R Y M E S H                                  │
-└─────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    Q U E R Y M E S H                                     │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
 
-  ┌──────────────┐         ┌─────────────────────────────────────────────────┐
-  │    URLs      │         │                   KAFKA                         │
-  │   Producer   │────────►│  ┌───────────────┐    ┌───────────────────┐    │
-  │   (Python)   │         │  │frontier.ready │    │ crawl.fetch.success│    │
-  └──────────────┘         │  └───────┬───────┘    └─────────▲─────────┘    │
-                           │          │                      │              │
-                           │          │    ┌─────────────────┤              │
-                           │          │    │  frontier.retry │              │
-                           │          │    └────────┬────────┘              │
-                           │          │             │                       │
-                           │          │    ┌────────▼────────┐              │
-                           │          │    │ crawl.fetch.dlq │              │
-                           │          │    └─────────────────┘              │
-                           └──────────┼─────────────────────────────────────┘
-                                      │
-                                      ▼
-                           ┌──────────────────────────────────────────────────┐
-                           │              F E T C H E R  (Go)                 │
-                           │  ┌────────────────────────────────────────────┐  │
-                           │  │  ┌─────────┐  ┌─────────┐  ┌─────────┐    │  │
-                           │  │  │Worker 1 │  │Worker 2 │  │Worker N │    │  │
-                           │  │  └────┬────┘  └────┬────┘  └────┬────┘    │  │
-                           │  │       │            │            │         │  │
-                           │  │       └────────────┼────────────┘         │  │
-                           │  │                    ▼                      │  │
-                           │  │         ┌──────────────────┐              │  │
-                           │  │         │   Fetch Pipeline │              │  │
-                           │  │         │  ├─ Robots Check │              │  │
-                           │  │         │  ├─ Politeness   │              │  │
-                           │  │         │  ├─ HTTP Fetch   │              │  │
-                           │  │         │  └─ Store & Emit │              │  │
-                           │  │         └──────────────────┘              │  │
-                           │  └────────────────────────────────────────────┘  │
-                           └───────────────────────┬──────────────────────────┘
-                                                   │
-                        ┌──────────────────────────┼───────────────────────────┐
-                        │                          │                           │
-                        ▼                          ▼                           ▼
-               ┌─────────────────┐       ┌─────────────────┐         ┌─────────────────┐
-               │     VALKEY      │       │    MINIO/S3     │         │  HEALTH SERVER  │
-               │   (Redis Cache) │       │    (Storage)    │         │   :8080/health  │
-               │                 │       │                 │         │                 │
-               │ • Robots.txt    │       │ • Raw HTML      │         │ • /health/live  │
-               │ • Politeness    │       │ • Headers       │         │ • /health/ready │
-               │   rate limits   │       │ • Metadata      │         │ • /metrics      │
-               └─────────────────┘       └─────────────────┘         └─────────────────┘
+  ┌──────────────┐                         ┌─────────────────────────────────────────────┐
+  │    Seed      │                         │                   KAFKA                     │
+  │    URLs      │────────────────────────►│  frontier.ready ────────────────────────►   │
+  │  (Producer)  │                         │       │              │                      │
+  └──────────────┘                         │       │    crawl.fetch.success ──────────►  │
+                                           │       │              │                      │
+        ┌──────────────────────────────────┼───────┘              │    crawl.parse.success
+        │                                  │                      │              │       │
+        │  ◄───────── New URLs ────────────┼──────────────────────┼──────────────┘       │
+        │                                  └──────────────────────┼──────────────────────┘
+        │                                                         │
+        ▼                                                         ▼
+┌───────────────────────────────┐                    ┌───────────────────────────────┐
+│       F E T C H E R           │                    │        P A R S E R            │
+│  ┌─────────────────────────┐  │                    │  ┌─────────────────────────┐  │
+│  │  • Robots.txt check     │  │                    │  │  • Read raw from S3     │  │
+│  │  • Politeness delay     │  │                    │  │  • Extract text         │  │
+│  │  • HTTP fetch           │  │     Success        │  │  • Extract links        │  │
+│  │  • Error classification │  │ ──────────────────►│  │  • Bloom filter dedup   │  │
+│  │  • Store raw to S3      │  │                    │  │  • Queue new URLs       │  │
+│  │  • Emit success event   │  │                    │  │  • Store parsed to S3   │  │
+│  └─────────────────────────┘  │                    │  └─────────────────────────┘  │
+└───────────────────────────────┘                    └───────────────────────────────┘
+        │                                                         │
+        │                                                         │
+        └────────────────────────┬────────────────────────────────┘
+                                 │
+         ┌───────────────────────┼───────────────────────┐
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│     VALKEY      │     │    MINIO/S3     │     │  HEALTH SERVER  │
+│   (Redis Cache) │     │    (Storage)    │     │   :8080/health  │
+│                 │     │                 │     │                 │
+│ • Robots.txt    │     │ • crawler-raw   │     │ • /health/live  │
+│ • Politeness    │     │ • crawler-parsed│     │ • /health/ready │
+│ • Bloom filter  │     │                 │     │ • /metrics      │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
 ---
@@ -69,12 +61,24 @@ QueryMesh is an event-driven web fetching system designed for horizontal scalabi
 |---------|-------------|
 | **Distributed Processing** | Kafka consumer groups enable horizontal scaling |
 | **Polite Crawling** | Respects `robots.txt` and enforces per-host crawl delays |
+| **URL Deduplication** | Distributed Bloom filter prevents re-crawling URLs |
+| **Content Extraction** | Extracts clean text and links from HTML |
 | **Fault Tolerant** | Exponential backoff retry with dead letter queue |
 | **Cloud Native** | Kubernetes-first design with health probes |
 | **S3 Compatible** | Custom AWS4 signature implementation (works with MinIO/S3) |
-| **Content Preservation** | Stores full HTTP response with headers and metadata |
-| **Intelligent Retry** | Classifies errors as retriable vs terminal |
 | **Observable** | Health endpoints, structured logging, metrics-ready |
+
+---
+
+## Execution Modes
+
+QueryMesh uses a single Docker image with multiple execution modes:
+
+| Mode | `EXECUTION_MODE` | Description |
+|------|------------------|-------------|
+| **Fetcher** | `fetcher` | Fetches URLs, stores raw HTML in S3 |
+| **Parser** | `parser` | Extracts text/links, queues new URLs |
+| **Consumer** | `consumer` | Legacy consumer mode |
 
 ---
 
@@ -82,167 +86,126 @@ QueryMesh is an event-driven web fetching system designed for horizontal scalabi
 
 ```
 QueryMesh/
-├── crawler/                      # Main Go application
-│   ├── cmd/
-│   │   └── consumer/
-│   │       └── main.go           # Application entry point
+├── crawler/                       # Main Go application
+│   ├── cmd/consumer/main.go       # Entry point with mode switch
 │   ├── internal/
-│   │   ├── config/               # Configuration management
-│   │   ├── fetcher/              # Core fetch pipeline
-│   │   │   ├── classify.go       # Error classification logic
-│   │   │   ├── handler.go        # URL fetch handling
-│   │   │   ├── init.go           # Fetcher initialization
-│   │   │   └── types.go          # Data structures
-│   │   ├── health/               # Health check HTTP server
-│   │   ├── kafka/                # Kafka consumer/producer utilities
-│   │   ├── robots/               # Robots.txt parser with caching
-│   │   ├── storage/              # S3 client with AWS4 signing
-│   │   ├── utils/                # Helper utilities
-│   │   └── worker/               # Legacy worker processor
-│   ├── Dockerfile                # Multi-stage Docker build
-│   └── go.mod                    # Go module definition
-├── k8s/                          # Kubernetes manifests
-│   ├── namespace.yaml            # querymesh namespace
-│   ├── zookeeper.yaml            # Zookeeper for Kafka
-│   ├── kafka.yaml                # Kafka broker
-│   ├── kafka-topics-job.yaml     # Topic creation job
-│   ├── valkey.yaml               # Valkey (Redis) StatefulSet
-│   ├── minio.yaml                # MinIO S3 storage
-│   ├── minio-bucket-job.yaml     # Bucket creation job
-│   ├── fetcher-config.yaml       # Fetcher ConfigMap & Secrets
-│   └── fetcher.yaml              # Fetcher Deployment
-├── scripts/
-│   ├── kafka_producer.py         # Test URL producer
-│   └── requirements.txt          # Python dependencies
-├── skaffold.yaml                 # Local development config
-└── kafka_producer.py             # Convenience wrapper
+│   │   ├── config/                # Configuration management
+│   │   ├── fetcher/               # URL fetching pipeline
+│   │   │   ├── classify.go        # Error classification
+│   │   │   ├── handler.go         # Fetch handling
+│   │   │   ├── init.go            # Initialization
+│   │   │   └── types.go           # Data types
+│   │   ├── parser/                # Content parsing pipeline
+│   │   │   ├── extractor.go       # HTML text/link extraction
+│   │   │   ├── handler.go         # Parse handling
+│   │   │   ├── init.go            # Initialization
+│   │   │   └── types.go           # Data types
+│   │   ├── bloom/                 # Distributed Bloom filter
+│   │   │   └── bloom.go           # Valkey-backed deduplication
+│   │   ├── health/                # Health check server
+│   │   ├── robots/                # Robots.txt cache
+│   │   └── storage/               # S3 client
+│   └── Dockerfile
+├── k8s/                           # Kubernetes manifests
+│   ├── fetcher.yaml               # Fetcher deployment
+│   ├── fetcher-config.yaml        # Fetcher configuration
+│   ├── parser.yaml                # Parser deployment
+│   ├── parser-config.yaml         # Parser configuration
+│   ├── kafka.yaml                 # Kafka broker
+│   ├── valkey.yaml                # Valkey cache
+│   └── minio.yaml                 # S3 storage
+├── scripts/                       # Test utilities
+└── skaffold.yaml                  # Local development
 ```
 
 ---
 
-## Fetch Pipeline
+## Pipeline Flow
 
-Every URL goes through a carefully orchestrated pipeline:
+### 1. Fetcher Pipeline
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         F E T C H   P I P E L I N E                     │
-└─────────────────────────────────────────────────────────────────────────┘
+frontier.ready ──► FETCHER ──► crawler-raw (S3) ──► crawl.fetch.success
+                      │
+                      ├── Robots.txt check
+                      ├── Politeness enforcement
+                      ├── HTTP fetch
+                      ├── Error classification
+                      └── Retry/DLQ handling
+```
 
-    ╔═══════════════════════════════════════════════════════════════════╗
-    ║  STEP 1: PARSE & VALIDATE                                         ║
-    ║  • Unmarshal JSON job from Kafka                                  ║
-    ║  • Validate URL format                                            ║
-    ║  • Initialize attempt counter                                     ║
-    ╚═══════════════════════════════════════════════════════════════════╝
-                                    │
-                                    ▼
-    ╔═══════════════════════════════════════════════════════════════════╗
-    ║  STEP 2: ROBOTS.TXT CHECK                                         ║
-    ║  • Fetch robots.txt (cached in Valkey, 24hr TTL)                  ║
-    ║  • Check if URL path is allowed for our User-Agent                ║
-    ║  • Blocked URLs → Dead Letter Queue                               ║
-    ╚═══════════════════════════════════════════════════════════════════╝
-                                    │
-                                    ▼
-    ╔═══════════════════════════════════════════════════════════════════╗
-    ║  STEP 3: POLITENESS ENFORCEMENT                                   ║
-    ║  • Get Crawl-Delay from robots.txt (min: 1s, max: 60s)            ║
-    ║  • Check per-host rate limit in Valkey                            ║
-    ║  • Sleep if needed to respect delay                               ║
-    ║  • Update next-allowed-fetch timestamp                            ║
-    ╚═══════════════════════════════════════════════════════════════════╝
-                                    │
-                                    ▼
-    ╔═══════════════════════════════════════════════════════════════════╗
-    ║  STEP 4: HTTP FETCH                                               ║
-    ║  • Create request with User-Agent header                          ║
-    ║  • Execute with configured timeout (default: 30s)                 ║
-    ║  • Read body up to max size (default: 10MB)                       ║
-    ║  • Classify any errors (retriable vs terminal)                    ║
-    ╚═══════════════════════════════════════════════════════════════════╝
-                                    │
-                    ┌───────────────┼───────────────┐
-                    │               │               │
-                    ▼               ▼               ▼
-              ┌─────────┐    ┌───────────┐    ┌─────────┐
-              │ SUCCESS │    │ RETRIABLE │    │ TERMINAL│
-              │         │    │   ERROR   │    │  ERROR  │
-              └────┬────┘    └─────┬─────┘    └────┬────┘
-                   │               │               │
-                   ▼               ▼               ▼
-    ╔══════════════════╗  ╔═══════════════╗  ╔═══════════════╗
-    ║ STEP 5a: STORE   ║  ║ STEP 5b:RETRY ║  ║ STEP 5c: DLQ  ║
-    ║ • Hash content   ║  ║ • Exp backoff ║  ║ • Publish to  ║
-    ║ • Upload to S3   ║  ║ • Publish to  ║  ║   DLQ topic   ║
-    ║ • Emit success   ║  ║   retry topic ║  ║ • Log reason  ║
-    ╚══════════════════╝  ╚═══════════════╝  ╚═══════════════╝
+### 2. Parser Pipeline
+
+```
+crawl.fetch.success ──► PARSER ──► crawler-parsed (S3) ──► crawl.parse.success
+                           │                                      │
+                           ├── Read raw HTML from S3              │
+                           ├── Extract text content               │
+                           ├── Extract & normalize links          │
+                           ├── Bloom filter deduplication ────────┘
+                           └── Queue new URLs ──► frontier.ready
 ```
 
 ---
 
-## Error Classification
+## URL Deduplication (Bloom Filter)
 
-The fetcher intelligently classifies errors to determine the appropriate action:
-
-### Retriable Errors (Will Retry with Backoff)
-
-| Error Type | Examples |
-|------------|----------|
-| **Network Timeouts** | Connection timeout, read timeout |
-| **DNS Temporary Failures** | DNS server unavailable |
-| **Connection Issues** | Connection refused, reset, EOF |
-| **Server Errors** | HTTP 500, 502, 503, 504 |
-| **Rate Limiting** | HTTP 408, 429 |
-| **Cloudflare Errors** | HTTP 520-524 |
-
-### Terminal Errors (Sent to DLQ)
-
-| Error Type | Examples |
-|------------|----------|
-| **DNS Not Found** | NXDOMAIN |
-| **Certificate Errors** | Invalid/expired SSL cert |
-| **Client Errors** | HTTP 400, 401, 403, 404, 405, 410, 414, 451 |
-| **Robots Blocked** | Disallowed by robots.txt |
-| **Max Retries Exceeded** | Failed after 5 attempts |
-
-### Retry Strategy
+The parser uses a **distributed Bloom filter** backed by Valkey to efficiently deduplicate URLs:
 
 ```
-Attempt 1 failed  →  Wait ~1 min   →  Retry
-Attempt 2 failed  →  Wait ~2 min   →  Retry
-Attempt 3 failed  →  Wait ~4 min   →  Retry
-Attempt 4 failed  →  Wait ~8 min   →  Retry
-Attempt 5 failed  →  Wait ~16 min  →  Retry
-Attempt 6 failed  →  Send to DLQ
+┌─────────────────────────────────────────────────────────────────┐
+│                    BLOOM FILTER DEDUPLICATION                   │
+└─────────────────────────────────────────────────────────────────┘
 
-* Delays include up to 25% jitter
-* Maximum delay capped at 24 hours
+   Extracted URL ──► Normalize ──► Check Bloom ──► Add to Bloom
+                                        │
+                         ┌──────────────┴──────────────┐
+                         │                             │
+                    NOT IN FILTER                  IN FILTER
+                    (Definitely new)            (Probably seen)
+                         │                             │
+                         ▼                             ▼
+                Queue to frontier              Skip (deduplicated)
 ```
+
+**Configuration:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BLOOM_FILTER_KEY` | `bloom:urls` | Redis key for bloom filter |
+| `BLOOM_EXPECTED_ITEMS` | `10000000` | Expected number of URLs |
+| `BLOOM_FALSE_POSITIVE_RATE` | `0.01` | 1% false positive rate |
+| `BLOOM_TTL` | `0` | TTL in seconds (0 = no expiry) |
 
 ---
 
 ## Kafka Topics
 
-| Topic | Purpose |
-|-------|---------|
-| `frontier.ready` | Input queue - URLs ready to be fetched |
-| `frontier.retry` | Retry queue - Failed URLs awaiting retry |
-| `crawl.fetch.success` | Output - Successfully fetched URLs |
-| `crawl.fetch.dlq` | Dead letter queue - Permanently failed URLs |
+| Topic | Direction | Description |
+|-------|-----------|-------------|
+| `frontier.ready` | Input (Fetcher) | URLs ready to be fetched |
+| `frontier.retry` | Internal | Failed URLs awaiting retry |
+| `crawl.fetch.success` | Output (Fetcher) → Input (Parser) | Successfully fetched |
+| `crawl.fetch.dlq` | Output | Fetch dead letter queue |
+| `crawl.parse.success` | Output (Parser) | Successfully parsed |
+| `crawl.parse.dlq` | Output | Parse dead letter queue |
 
-### Message Formats
+---
 
-**Input (frontier.ready):**
+## Message Formats
+
+### Frontier Job (frontier.ready)
 ```json
 {
   "url": "https://example.com/page",
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "attempt": 1
+  "attempt": 1,
+  "parent_url": "https://example.com/",
+  "depth": 2
 }
 ```
 
-**Success Output (crawl.fetch.success):**
+### Fetch Success (crawl.fetch.success)
 ```json
 {
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -255,40 +218,65 @@ Attempt 6 failed  →  Send to DLQ
 }
 ```
 
-**Dead Letter (crawl.fetch.dlq):**
+### Parse Success (crawl.parse.success)
 ```json
 {
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "url": "https://example.com/blocked",
-  "attempt": 5,
-  "reason": "max retries exceeded: connection timeout"
+  "url": "https://example.com/page",
+  "source_s3_key": "raw/550e8400.../a1b2c3d4...",
+  "parsed_s3_key": "parsed/550e8400.../a1b2c3d4...",
+  "links_extracted": 42,
+  "new_links_queued": 15,
+  "text_length": 5234,
+  "parse_timestamp_utc": "2024-01-15T10:30:05Z"
 }
 ```
 
 ---
 
-## S3 Storage Format
+## S3 Storage
 
-Fetched content is stored in S3 with full metadata:
+### Raw Content Bucket (`crawler-raw`)
 
-**Key Pattern:** `raw/{job_id}/{sha256(url)}`
+**Key:** `raw/{job_id}/{sha256(url)}`
 
-**Payload:**
 ```json
 {
   "url": "https://example.com/page",
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
   "status_code": 200,
-  "headers": {
-    "Content-Type": ["text/html; charset=utf-8"],
-    "Content-Length": ["12345"],
-    "Last-Modified": ["Mon, 15 Jan 2024 10:00:00 GMT"]
-  },
-  "body_b64": "PCFET0NUWVBFIGh0bWw+Li4u",
+  "headers": {"Content-Type": ["text/html"]},
+  "body_b64": "PCFET0NUWVBFIGh0bWw+...",
   "content_type": "text/html",
-  "fetch_timestamp_utc": "2024-01-15T10:30:00.123456789Z",
-  "content_hash_sha256": "e3b0c44298fc1c149afbf4c8996fb924...",
-  "attempt": 1
+  "fetch_timestamp_utc": "2024-01-15T10:30:00Z",
+  "content_hash_sha256": "e3b0c44298fc1c149afbf4c8996fb924..."
+}
+```
+
+### Parsed Content Bucket (`crawler-parsed`)
+
+**Key:** `parsed/{job_id}/{sha256(url)}`
+
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "url": "https://example.com/page",
+  "source_s3_key": "raw/550e8400.../...",
+  "title": "Example Page",
+  "description": "This is an example page",
+  "text": "Clean extracted text content...",
+  "text_hash": "sha256:...",
+  "text_length": 5234,
+  "language": "en",
+  "links": [
+    {"url": "https://example.com/other", "text": "Other Page", "is_new": true, "type": "internal"},
+    {"url": "https://external.com/", "text": "External", "is_new": false, "type": "external"}
+  ],
+  "links_count": 42,
+  "new_links_count": 15,
+  "skipped_count": 27,
+  "parse_timestamp_utc": "2024-01-15T10:30:05Z",
+  "processing_time_ms": 125
 }
 ```
 
@@ -296,118 +284,116 @@ Fetched content is stored in S3 with full metadata:
 
 ## Configuration
 
-All configuration via environment variables:
+### Fetcher Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `EXECUTION_MODE` | `fetcher` | Set to `fetcher` |
 | `KAFKA_BROKER` | `kafka:9092` | Kafka bootstrap server |
+| `FETCHER_GROUP_ID` | `fetcher-group` | Consumer group |
 | `FRONTIER_READY_TOPIC` | `frontier.ready` | Input topic |
-| `FETCH_RETRY_TOPIC` | `frontier.retry` | Retry queue topic |
-| `FETCH_SUCCESS_TOPIC` | `crawl.fetch.success` | Success output topic |
-| `FETCH_DLQ_TOPIC` | `crawl.fetch.dlq` | Dead letter queue topic |
-| `FETCHER_GROUP_ID` | `fetcher-group` | Kafka consumer group |
-| `WORKER_COUNT` | `4` | Concurrent worker goroutines |
-| `HTTP_TIMEOUT` | `10s` | General HTTP timeout |
-| `FETCH_TIMEOUT` | `30s` | URL fetch timeout |
-| `USER_AGENT` | `QueryMeshFetcher/0.1` | HTTP User-Agent header |
-| `VALKEY_ADDR` | `valkey:6379` | Valkey/Redis address |
-| `S3_ENDPOINT` | `s3:9000` | S3/MinIO endpoint |
-| `S3_BUCKET` | `crawler-raw` | Storage bucket name |
-| `S3_ACCESS_KEY` | - | S3 access key |
-| `S3_SECRET_KEY` | - | S3 secret key |
-| `S3_REGION` | `us-east-1` | S3 region |
-| `HEALTH_PORT` | `8080` | Health check server port |
+| `FETCH_SUCCESS_TOPIC` | `crawl.fetch.success` | Output topic |
+| `USER_AGENT` | `QueryMeshFetcher/0.1` | HTTP User-Agent |
+| `S3_BUCKET` | `crawler-raw` | Raw content bucket |
+
+### Parser Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `EXECUTION_MODE` | `parser` | Set to `parser` |
+| `PARSER_GROUP_ID` | `parser-group` | Consumer group |
+| `FETCH_SUCCESS_TOPIC` | `crawl.fetch.success` | Input topic |
+| `PARSE_SUCCESS_TOPIC` | `crawl.parse.success` | Output topic |
+| `FRONTIER_READY_TOPIC` | `frontier.ready` | URL queue topic |
+| `S3_BUCKET` | `crawler-raw` | Raw content bucket |
+| `S3_PARSED_BUCKET` | `crawler-parsed` | Parsed content bucket |
+| `BLOOM_EXPECTED_ITEMS` | `10000000` | Expected URLs |
+| `BLOOM_FALSE_POSITIVE_RATE` | `0.01` | FP rate (1%) |
 
 ---
 
 ## Quick Start
 
-### Prerequisites
-
-- Docker & Kubernetes (Docker Desktop, minikube, or k3s)
-- [Skaffold](https://skaffold.dev/docs/install/) for local development
-- Python 3.8+ (for test producer)
-
-### Local Development
+### Local Development with Skaffold
 
 ```bash
-# 1. Start the entire stack with Skaffold
+# 1. Start the entire stack
 skaffold dev
 
-# 2. Wait for all pods to be ready
+# 2. Watch pods come up
 kubectl get pods -n querymesh -w
 
-# 3. In another terminal, produce test URLs
+# 3. Produce seed URLs
 cd scripts
 pip install -r requirements.txt
 python kafka_producer.py
 
-# 4. Watch the logs
+# 4. Watch the crawler work
 kubectl logs -n querymesh -l app=fetcher -f
+kubectl logs -n querymesh -l app=parser -f
 ```
 
-### Manual Kubernetes Deployment
+### Manual Deployment
 
 ```bash
-# 1. Create namespace and deploy infrastructure
+# Deploy infrastructure
 kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/zookeeper.yaml
 kubectl apply -f k8s/kafka.yaml
 kubectl apply -f k8s/valkey.yaml
 kubectl apply -f k8s/minio.yaml
 
-# 2. Wait for infrastructure to be ready
+# Wait for infrastructure
 kubectl wait --for=condition=ready pod -l app=kafka -n querymesh --timeout=120s
 
-# 3. Create Kafka topics and S3 bucket
+# Create topics and buckets
 kubectl apply -f k8s/kafka-topics-job.yaml
 kubectl apply -f k8s/minio-bucket-job.yaml
 
-# 4. Deploy fetcher
+# Deploy fetcher and parser
 kubectl apply -f k8s/fetcher-config.yaml
 kubectl apply -f k8s/fetcher.yaml
+kubectl apply -f k8s/parser-config.yaml
+kubectl apply -f k8s/parser.yaml
 ```
 
-### Health Checks
+---
+
+## Scaling
+
+Both fetcher and parser scale horizontally via Kafka consumer groups:
 
 ```bash
-# Port-forward to access health endpoints
-kubectl port-forward -n querymesh svc/fetcher 8080:8080
+# Scale fetchers
+kubectl scale deployment fetcher -n querymesh --replicas=5
 
-# Check health
-curl http://localhost:8080/health
-curl http://localhost:8080/health/live
-curl http://localhost:8080/health/ready
+# Scale parsers
+kubectl scale deployment parser -n querymesh --replicas=3
 ```
+
+The Bloom filter is distributed via Valkey, so all parser instances share deduplication state.
 
 ---
 
 ## Health Endpoints
 
-| Endpoint | Purpose | Response |
-|----------|---------|----------|
-| `/health` | Full status with component details | JSON with all component statuses |
-| `/health/live` | Kubernetes liveness probe | 200 if process is running |
-| `/health/ready` | Kubernetes readiness probe | 200 if all dependencies are up |
-| `/metrics` | Prometheus metrics (stub) | Placeholder for metrics |
+Both fetcher and parser expose health endpoints:
 
-**Health Response Example:**
-```json
-{
-  "status": "healthy",
-  "components": {
-    "kafka": {"status": "healthy", "latency_ms": 2},
-    "valkey": {"status": "healthy", "latency_ms": 1},
-    "s3": {"status": "healthy", "latency_ms": 15}
-  },
-  "timestamp": "2024-01-15T10:30:00Z"
-}
+| Endpoint | Purpose |
+|----------|---------|
+| `/health` | Full status with components |
+| `/health/live` | Kubernetes liveness probe |
+| `/health/ready` | Kubernetes readiness probe |
+
+```bash
+# Check fetcher health
+kubectl port-forward -n querymesh svc/fetcher 8080:8080
+curl http://localhost:8080/health
+
+# Check parser health
+kubectl port-forward -n querymesh svc/parser 8081:8080
+curl http://localhost:8081/health
 ```
-
-**Status Levels:**
-- `healthy` - All components operational
-- `degraded` - Non-critical component issues (Valkey, S3)
-- `unhealthy` - Critical component failure (Kafka)
 
 ---
 
@@ -415,64 +401,53 @@ curl http://localhost:8080/health/ready
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| **Runtime** | Go 1.22 | High-performance, concurrent execution |
-| **Container** | Alpine 3.20 | Minimal, secure base image |
-| **Message Queue** | Apache Kafka | Event streaming & work distribution |
-| **Cache** | Valkey (Redis fork) | Robots.txt & politeness caching |
-| **Object Storage** | MinIO / S3 | Raw content storage |
+| **Runtime** | Go 1.22 | High-performance execution |
+| **Message Queue** | Apache Kafka | Event streaming |
+| **Cache** | Valkey (Redis) | Robots.txt, politeness, bloom filter |
+| **Storage** | MinIO / S3 | Content storage |
 | **Orchestration** | Kubernetes | Container orchestration |
-| **Dev Workflow** | Skaffold | Local development & hot reload |
 
 ### Go Dependencies
 
 | Package | Purpose |
 |---------|---------|
-| `github.com/twmb/franz-go` | Modern, high-performance Kafka client |
+| `github.com/twmb/franz-go` | Kafka client |
 | `github.com/redis/go-redis/v9` | Valkey/Redis client |
 | `github.com/temoto/robotstxt` | Robots.txt parsing |
-| `golang.org/x/sync` | errgroup for concurrent workers |
+| `github.com/google/uuid` | UUID generation |
+| `golang.org/x/net/html` | HTML parsing |
 
 ---
 
 ## Design Decisions
 
-### Why Kafka?
+### Single Image, Multiple Modes
+- **Simpler CI/CD**: One image to build and deploy
+- **Consistent dependencies**: Same Go binary for all workers
+- **Easy scaling**: Just change `EXECUTION_MODE` env var
 
-- **Durability**: Messages persist until explicitly consumed
-- **Scalability**: Consumer groups enable horizontal scaling
-- **Ordering**: Per-partition ordering for rate limiting
-- **Replay**: Can reprocess from any offset
+### Distributed Bloom Filter
+- **Memory efficient**: ~120MB for 10M URLs at 1% FP rate
+- **Shared state**: All parser instances use same filter
+- **Persistent**: Survives restarts via Valkey
 
-### Why Custom S3 Signing?
-
-- **No SDK bloat**: Zero external AWS SDK dependencies
-- **Full control**: Custom retry and timeout behavior
-- **Compatibility**: Works with any S3-compatible storage (MinIO, R2, etc.)
-
-### Why Valkey over Redis?
-
-- **Open source**: Truly open source Redis fork
-- **API compatible**: Drop-in replacement
-- **Community driven**: Active development after Redis license change
-
-### Why Per-Host Politeness in Valkey?
-
-- **Distributed**: All fetcher instances share rate limits
-- **Persistent**: Survives fetcher restarts
-- **Atomic**: Redis commands are atomic
+### Event-Driven Architecture
+- **Decoupled**: Fetcher and parser are independent
+- **Scalable**: Each component scales independently
+- **Reliable**: Kafka provides durability and replay
 
 ---
 
 ## Roadmap
 
-- [ ] Unit and integration tests
+- [x] URL fetching with robots.txt compliance
+- [x] Content parsing and text extraction
+- [x] Link extraction and normalization
+- [x] Distributed Bloom filter deduplication
 - [ ] Prometheus metrics integration
-- [ ] URL deduplication (content hash-based)
-- [ ] Link extraction and discovery
+- [ ] Content-hash based deduplication
 - [ ] Sitemap.xml parsing
-- [ ] Respect `Retry-After` headers
 - [ ] Distributed tracing (OpenTelemetry)
-- [ ] Configuration hot-reload
 - [ ] Web UI for monitoring
 
 ---
