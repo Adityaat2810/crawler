@@ -22,6 +22,8 @@ manifests:
     - k8s/minio-bucket-job.yaml
     - k8s/fetcher-config.yaml
     - k8s/fetcher.yaml
+    - k8s/parser-config.yaml
+    - k8s/parser.yaml
 deploy:
   kubectl: {}
 portForward:
@@ -33,6 +35,10 @@ portForward:
     resourceName: fetcher
     port: 8080
     localPort: 8080
+  - resourceType: service
+    resourceName: parser
+    port: 8080
+    localPort: 8081
 profiles:
   - name: dev
     activation:
