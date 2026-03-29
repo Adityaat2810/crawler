@@ -29,8 +29,12 @@ spec:
                 replication="${3:-1}"
                 kafka-topics --create --if-not-exists --bootstrap-server "$broker" --topic "$topic" --partitions "$partitions" --replication-factor "$replication"
               }
+              # Fetcher topics
               create_topic frontier.ready 3 1
               create_topic frontier.retry 3 1
               create_topic crawl.fetch.success 3 1
               create_topic crawl.fetch.dlq 3 1
-              echo "topics ensured"
+              # Parser topics
+              create_topic crawl.parse.success 3 1
+              create_topic crawl.parse.dlq 3 1
+              echo "all topics ensured"

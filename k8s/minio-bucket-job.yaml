@@ -1,13 +1,14 @@
-# Job to create the MinIO bucket if it doesn't exist. 
+# Job to create the MinIO buckets if they don't exist. 
+apiVersion: batch/v1
 kind: Job
 metadata:
-  name: minio-create-bucket
+  name: minio-create-buckets
   namespace: querymesh
 spec:
   template:
     metadata:
       labels:
-        app: minio-create-bucket
+        app: minio-create-buckets
     spec:
       restartPolicy: OnFailure
       containers:
@@ -26,14 +27,16 @@ spec:
                 secretKeyRef:
                   name: s3-credentials
                   key: secretkey
-            - name: BUCKET
-              value: crawler-raw
           command:
             - sh
             - -c
             - |
               set -e
               mc alias set local "${MINIO_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}"
-              mc mb --ignore-existing local/"${BUCKET}"
-              mc anonymous set download local/"${BUCKET}"
-              echo "bucket ensured"
+              # Create raw content bucket
+              mc mb --ignore-existing local/crawler-raw
+              mc anonymous set download local/crawler-raw
+              # Create parsed content bucket
+              mc mb --ignore-existing local/crawler-parsed
+              mc anonymous set download local/crawler-parsed
+              echo "all buckets ensured"
